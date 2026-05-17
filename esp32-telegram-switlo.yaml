@@ -1,0 +1,207 @@
+substitutions:
+  # Telegram налаштування
+  tg_token: "000"
+  tg_chat_id: "000"
+  # Wi-Fi налаштування
+  wifi_ssid: !secret wifi_ssid
+  wifi_password: !secret wifi_password
+
+esphome:
+  name: esp32-telegram-switlo
+  friendly_name: esp32 telegram switlo
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+# Дозволяємо логування з інших потоків (важливо для tg_task)
+  level: DEBUG
+
+http_request:
+  useragent: esphome/esp32-telegram-switlo
+  verify_ssl: false
+  timeout: 10s
+
+web_server:
+  port: 80
+    
+external_components:
+  - source: github://hugokernel/esphome-zmpt101b@main
+    components: [zmpt101b]
+
+api:
+  reboot_timeout: 0s
+    
+ota:
+  - platform: esphome
+  - platform: web_server
+    
+wifi:
+  networks:
+  - ssid: !secret wifi_ssid
+    password: !secret wifi_password
+  - ssid: !secret wifi_ssid2
+    password: !secret wifi_password2
+  power_save_mode: none
+  reboot_timeout: 0s
+  min_auth_mode: WPA2
+
+
+    
+
+  ap:
+    ssid: "Esp32-Telegram-Test"
+
+
+globals:
+  - id: power_off_time
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+# 2. Додаємо синхронізацію часу
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "EET-2EEST,M3.5.0/3,M10.5.0/4"
+
+sensor:
+
+  # First, you need to declare an adc platform...
+  - platform: adc
+    pin: GPIO36
+    id: zmpt_adc
+    attenuation: 12db
+    update_interval: never    # Prevent default polling, let zmpt101b handle it
+    internal: true            # Hide raw ADC reading from Home Assistant
+
+  # ...then reference the previously declared adc platform in adc_id
+  - platform: zmpt101b
+    name: "AC Voltage"
+    adc_id: zmpt_adc
+    frequency: 50
+    sensitivity: 8.36
+
+
+  - platform: uptime
+    id: uptime_seconds
+    
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s 
+
+button:    
+  - platform: restart # Переключатель для перезагрузки устройства
+    name: "Restart"  
+
+
+binary_sensor:
+  - platform: status
+    name: "Online"
+
+  - platform: gpio
+    pin:
+      number: 26 # Або 13, залежно від підключення
+      inverted: false
+      mode: {input: true, pullup: true}
+    name: "Electricity"
+    # Додаємо фільтр, щоб не було Code 400 через брязкіт контактів
+    filters:
+      - delayed_on: 500ms
+      - delayed_off: 500ms
+    on_press: # Світло З'ЯВИЛОСЯ
+      then:
+        - lambda: |-
+            static bool is_processing_on = false;
+            if (is_processing_on) return;
+            is_processing_on = true;
+            xTaskCreate([](void* arg){
+              id(send_tg_on).execute();
+              delay(500); 
+              *((bool*)arg) = false;
+              vTaskDelete(NULL);
+            }, "tg_on", 12288, &is_processing_on, 1, NULL);
+    on_release: # Світло ЗНИКЛО
+      then:
+        - globals.set:
+            id: power_off_time
+            value: !lambda "return id(sntp_time).now().timestamp;"
+        - lambda: |-
+            static bool is_processing_off = false;
+            if (is_processing_off) return;
+            is_processing_off = true;
+            xTaskCreate([](void* arg){
+              id(send_tg_off).execute();
+              delay(500); 
+              *((bool*)arg) = false;
+              vTaskDelete(NULL);
+            }, "tg_off", 12288, &is_processing_off, 1, NULL);
+
+script:
+  - id: send_tg_on
+    mode: parallel
+    then:
+      - http_request.post:
+          url: !lambda 'return "https://api.telegram.org/bot${tg_token}/sendMessage";'
+          request_headers:
+            Content-Type: application/json
+          body: !lambda |-
+            char buf[300];
+            auto now = id(sntp_time).now();
+            std::string timestamp = now.is_valid() ? now.strftime("%H:%M:%S") : "невідомо";
+            std::string duration_str = "";
+
+            // Рахуємо тривалість, якщо час валідний і був запис про відключення
+            if (id(power_off_time) > 0 && now.is_valid()) {
+              int diff = now.timestamp - id(power_off_time);
+              int h = diff / 3600;
+              int m = (diff % 3600) / 60;
+              int s = diff % 60;
+              char d_buf[50];
+              sprintf(d_buf, "\\n⏳ Була відсутня: %02d:%02d:%02d", h, m, s);
+              duration_str = d_buf;
+            }
+
+            snprintf(buf, sizeof(buf), 
+              "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🟢 <b>Електрика відновлена!</b>%s\\n🕒 Час: %s\", \"parse_mode\": \"HTML\"}", 
+              duration_str.c_str(), timestamp.c_str());
+            return (std::string)buf;
+
+  - id: send_tg_off
+    mode: parallel
+    then:
+      - http_request.post:
+          url: !lambda 'return "https://api.telegram.org/bot${tg_token}/sendMessage";'
+          request_headers:
+            Content-Type: application/json
+          body: !lambda |-
+            char buf[256];
+            auto now = id(sntp_time).now();
+            std::string timestamp = now.is_valid() ? now.strftime("%H:%M:%S") : "невідомо";
+
+            snprintf(buf, sizeof(buf), 
+              "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🔴 <b>Електрика відключена!</b>\\n🕒 Час: %s\", \"parse_mode\": \"HTML\"}", 
+              timestamp.c_str());
+            return (std::string)buf;
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "ESP32 IP Address"
+      id: my_ip 
+    ssid:
+      name: "SSID"
+      id: my_ssid
+
+  - platform: version
+    name: "ESPHome Version"
+    hide_timestamp: true
+    hide_hash: true
+
+  - platform: uptime
+    name: Uptime
+    format:
+      separator: " "
+      days: "D"
