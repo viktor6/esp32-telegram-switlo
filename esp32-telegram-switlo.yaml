@@ -80,6 +80,7 @@ sensor:
   # ...then reference the previously declared adc platform in adc_id
   - platform: zmpt101b
     name: "AC Voltage"
+    id: ac_voltage          # Явно задаємо ID, щоб звертатися до нього в лямбді
     adc_id: zmpt_adc
     frequency: 50
     sensitivity: 8.36
@@ -148,12 +149,21 @@ script:
           request_headers:
             Content-Type: application/json
           body: !lambda |-
-            char buf[300];
+            char buf[350]; // Буфер із запасом під вольтаж
             auto now = id(sntp_time).now();
             std::string timestamp = now.is_valid() ? now.strftime("%H:%M:%S") : "невідомо";
             std::string duration_str = "";
 
-            // Рахуємо тривалість, якщо час валідний і був запис про відключення
+            // Отримуємо поточну напругу (яка з'явилася в мережі)
+            float volt = id(ac_voltage).state;
+            char v_buf[32];
+            if (std::isnan(volt)) {
+              snprintf(v_buf, sizeof(v_buf), "вимірювання...");
+            } else {
+              snprintf(v_buf, sizeof(v_buf), "%.1f V", volt);
+            }
+
+            // Рахуємо тривалість відключення
             if (id(power_off_time) > 0 && now.is_valid()) {
               int diff = now.timestamp - id(power_off_time);
               int h = diff / 3600;
@@ -164,9 +174,10 @@ script:
               duration_str = d_buf;
             }
 
+            // Збираємо все в один HTML-пакет
             snprintf(buf, sizeof(buf), 
-              "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🟢 <b>Електрика відновлена!</b>%s\\n🕒 Час: %s\", \"parse_mode\": \"HTML\"}", 
-              duration_str.c_str(), timestamp.c_str());
+              "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🟢 <b>Електрика відновлена!</b>%s\\n📊 Напруга: <b>%s</b>\\n🕒 Час: %s\", \"parse_mode\": \"HTML\"}", 
+              duration_str.c_str(), v_buf, timestamp.c_str());
             return (std::string)buf;
 
   - id: send_tg_off
