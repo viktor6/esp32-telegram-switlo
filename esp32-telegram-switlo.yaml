@@ -149,12 +149,15 @@ script:
           request_headers:
             Content-Type: application/json
           body: !lambda |-
-            char buf[350]; // Буфер із запасом під вольтаж
             auto now = id(sntp_time).now();
-            std::string timestamp = now.is_valid() ? now.strftime("%H:%M:%S") : "невідомо";
-            std::string duration_str = "";
-
-            // Отримуємо поточну напругу (яка з'явилася в мережі)
+            
+            // 1. Формуємо час сповіщення
+            std::string timestamp = "невідомо";
+            if (now.is_valid()) {
+              timestamp = now.strftime("%H:%M:%S");
+            }
+            
+            // 2. Формуємо напругу (Захист від nan)
             float volt = id(ac_voltage).state;
             char v_buf[32];
             if (std::isnan(volt)) {
@@ -162,23 +165,28 @@ script:
             } else {
               snprintf(v_buf, sizeof(v_buf), "%.1f V", volt);
             }
+            std::string volt_str = v_buf;
 
-            // Рахуємо тривалість відключення
+            // 3. Розрахунок тривалості відсутності живлення
+            std::string duration_str = "";
             if (id(power_off_time) > 0 && now.is_valid()) {
               int diff = now.timestamp - id(power_off_time);
               int h = diff / 3600;
               int m = (diff % 3600) / 60;
               int s = diff % 60;
-              char d_buf[50];
-              sprintf(d_buf, "\\n⏳ Була відсутня: %02d:%02d:%02d", h, m, s);
+              char d_buf[60];
+              snprintf(d_buf, sizeof(d_buf), "\\n⏳ Була відсутня: %02d:%02d:%02d", h, m, s);
               duration_str = d_buf;
             }
 
-            // Збираємо все в один HTML-пакет
-            snprintf(buf, sizeof(buf), 
-              "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🟢 <b>Електрика відновлена!</b>%s\\n📊 Напруга: <b>%s</b>\\n🕒 Час: %s\", \"parse_mode\": \"HTML\"}", 
-              duration_str.c_str(), v_buf, timestamp.c_str());
-            return (std::string)buf;
+            // 4. Безпечна збірка JSON без snprintf
+            std::string body = "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🟢 <b>Електрика відновлена!</b>";
+            body += duration_str;
+            body += "\\n📊 Напруга: <b>" + volt_str + "</b>";
+            body += "\\n🕒 Час: " + timestamp;
+            body += "\", \"parse_mode\": \"HTML\"}";
+
+            return body;
 
   - id: send_tg_off
     mode: parallel
@@ -188,14 +196,15 @@ script:
           request_headers:
             Content-Type: application/json
           body: !lambda |-
-            char buf[256];
             auto now = id(sntp_time).now();
             std::string timestamp = now.is_valid() ? now.strftime("%H:%M:%S") : "невідомо";
 
-            snprintf(buf, sizeof(buf), 
-              "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🔴 <b>Електрика відключена!</b>\\n🕒 Час: %s\", \"parse_mode\": \"HTML\"}", 
-              timestamp.c_str());
-            return (std::string)buf;
+            // Безпечна збірка для відключення
+            std::string body = "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🔴 <b>Електрика відключена!</b>\\n🕒 Час: ";
+            body += timestamp;
+            body += "\", \"parse_mode\": \"HTML\"}";
+
+            return body;
 
 text_sensor:
   - platform: wifi_info
