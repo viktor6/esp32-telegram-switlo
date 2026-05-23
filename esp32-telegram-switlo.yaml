@@ -1,3 +1,5 @@
+###  https://github.com/lordzid/esphome-Telegram-send-message/blob/main/esp32-telegram-switlo.yaml
+
 substitutions:
   # Telegram налаштування
   tg_token: "000"
