@@ -1,16 +1,23 @@
 ###  https://github.com/lordzid/esphome-Telegram-send-message/blob/main/esp32-telegram-switlo.yaml
 
+
 substitutions:
   # Telegram налаштування
-  tg_token: "000"
-  tg_chat_id: "000"
+  tg_token: !secret tg_token
+  tg_chat_id: !secret tg_chat_id
   # Wi-Fi налаштування
   wifi_ssid: !secret wifi_ssid
   wifi_password: !secret wifi_password
+  device: "switlobot"
+  name:  "switlobot"
+  location: ${name}
+  reboot_timeout: 14d
+  update_interval: 10min
 
 esphome:
-  name: esp32-telegram-switlo
-  friendly_name: esp32 telegram switlo
+  name: ${device}
+  friendly_name: switlobot
+  #comment: Living room ESP32 controller
 
 esp32:
   board: esp32dev
@@ -22,7 +29,7 @@ logger:
   level: DEBUG
 
 http_request:
-  useragent: esphome/esp32-telegram-switlo
+  useragent: esphome/switlobot
   verify_ssl: false
   timeout: 10s
 
@@ -46,11 +53,14 @@ wifi:
     password: !secret wifi_password
   - ssid: !secret wifi_ssid2
     password: !secret wifi_password2
-  power_save_mode: none
-  reboot_timeout: 0s
-  min_auth_mode: WPA2
+  #power_save_mode: none
+  #reboot_timeout: 0s
+  #min_auth_mode: WPA2
 
-
+#  manual_ip:
+#    static_ip: 192.168.0.46
+#    gateway: 192.168.0.1
+#    subnet: 255.255.255.0
     
 
   ap:
@@ -211,14 +221,14 @@ script:
 text_sensor:
   - platform: wifi_info
     ip_address:
-      name: "ESP32 IP Address"
+      name: "IP Address"
       id: my_ip 
     ssid:
       name: "SSID"
       id: my_ssid
 
   - platform: version
-    name: "ESPHome Version"
+    name: "Version"
     hide_timestamp: true
     hide_hash: true
 
